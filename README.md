@@ -73,11 +73,20 @@ Example query to retrieve the number of metrics in the `http_requests_total` met
 
     $ prom2json http://my-prometheus-client.example.org:8080/metrics | jq '.[]|select(.name=="http_requests_total")|.metrics|length'
 
+Example input from stdin:
+
+    $ curl http://my-prometheus-client.example.org:8080/metrics | grep http_requests_total | prom2json
+
 # JSON format
 
 Note that all numbers are encoded as strings. Some parsers want it
 that way. Also, Prometheus allows sample values like `NaN` or `+Inf`,
 which cannot be encoded as JSON numbers.
+
+A histogram is formatted as a native histogram if it has at least one span. It
+is then formatted in a similar way as [the Prometheus query
+API](https://prometheus.io/docs/prometheus/latest/querying/api/#native-histograms)
+does it.
 
 ```json
 [
@@ -123,6 +132,73 @@ which cannot be encoded as JSON numbers.
     "metrics": [
       {
         "value": "1063110"
+      }
+    ]
+  },
+  {
+    "name": "http_request_duration_seconds",
+    "type": "HISTOGRAM",
+    "help": "This is a native histogram.",
+    "metrics": [
+      {
+        "labels": {
+        "method": "GET",
+        },
+        "buckets": [
+          [
+            0,
+            "17.448123722644123",
+            "19.027313840043536",
+            "139"
+          ],
+          [
+            0,
+            "19.027313840043536",
+            "20.749432874416154",
+            "85"
+          ],
+          [
+            0,
+            "20.749432874416154",
+            "22.62741699796952",
+            "70"
+          ],
+        ],
+        "count": "1000",
+        "sum": "29969.50000000001"
+      }
+    ]
+  },
+  {
+    "name": "some_weird_normal_distribution",
+    "type": "HISTOGRAM",
+    "help": "This is a classic histogram.",
+    "metrics": [
+      {
+        "buckets": {
+          "-0.0001899999999999998": "17",
+          "-0.0002899999999999998": "6",
+          "-0.0003899999999999998": "2",
+          "-0.0004899999999999998": "2",
+          "-0.0005899999999999998": "0",
+          "-0.0006899999999999999": "0",
+          "-0.0007899999999999999": "0",
+          "-0.00089": "0",
+          "-0.00099": "0",
+          "-8.999999999999979e-05": "33",
+          "0.00011000000000000022": "75",
+          "0.00021000000000000023": "92",
+          "0.0003100000000000002": "100",
+          "0.0004100000000000002": "103",
+          "0.0005100000000000003": "105",
+          "0.0006100000000000003": "106",
+          "0.0007100000000000003": "107",
+          "0.0008100000000000004": "107",
+          "0.0009100000000000004": "107",
+          "1.0000000000000216e-05": "50"
+        },
+        "count": "107",
+        "sum": "0.001792103516591124"
       }
     ]
   }

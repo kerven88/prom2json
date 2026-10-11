@@ -9,6 +9,43 @@
 * [ENHANCEMENT]
 * [BUGFIX]
 
+## 1.5.0 / 2025-10-14
+
+* [FEATURE] Add `--escaping` command line flag to negotiate escaping schemes including full UTF-8 support for metric and label names. #240
+* [ENHANCEMENT] Add `--help` and `--version` command line flags. #219
+
+## 1.4.2 / 2025-04-09
+
+* [BUGFIX] Fix formatting of error messages. #190
+
+_Besides the small fix above, this release comes with updated dependencies, and the pre-built binaries are using Go1.24.1, both to avoid potential security issues. (Note that this is just precaution. We do not know of any relevant vulnerabilities in v1.4.1.)_
+
+## 1.4.1 / 2024-09-19
+
+_There are no code changes in this release. It merely comes with updated dependencies, and the pre-built binaries are using Go1.23.1., both to avoid potential security issues. (Note that this is just precaution. We do not know of any relevant vulnerabilities in v1.4.0.)_
+
+## 1.4.0 / 2024-07-11
+
+* [FEATURE] Support native histograms. #169
+* [FEATURE] Support float histograms (classic and native). #176
+
+_This release also comes with updated dependencies, and the pre-built binaries are using Go1.22.5., both to avoid potential security issues. (Note that this is just precaution. We do not know of any relevant vulnerabilities in v1.3.3.)_
+
+## 1.3.3 / 2023-05-25
+
+_There are no code changes in this release. It merely comes with updated
+dependencies, and the pre-built binaries are using Go1.20.4., both to avoid potential security issues. (Note that this is just precaution. We do not know of any relevant vulnerabilities in v1.3.2.)_
+
+## 1.3.2 / 2022-10-07
+
+_There are no code changes in this release. It merely comes with updated
+dependencies, and the pre-built binaries are using Go1.19.2., both to avoid potential security issues. (Note that this is just precaution. We do not know of any relevant vulnerabilities in v1.3.1.)_
+
+## 1.3.1 / 2022-04-19
+
+_There are no code changes in this release. It merely comes with updated
+dependencies, and the pre-built binaries are using Go1.18.1., both to avoid potential security issues. (Note that this is just precaution. We do not know of any relevant vulnerabilities in v1.3.0.)_
+
 ## 1.3.0 / 2019-12-21
 
 * [ENHANCEMENT] Saner settings for the HTTP transport, based on the usual

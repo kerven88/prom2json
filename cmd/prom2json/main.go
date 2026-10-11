@@ -16,7 +16,6 @@ package main
 import (
 	"crypto/tls"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,36 +23,53 @@ import (
 	"os"
 	"time"
 
+	"github.com/alecthomas/kingpin/v2"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/version"
 
 	"github.com/prometheus/prom2json"
 )
 
-var usage = fmt.Sprintf(`Usage: %s [METRICS_PATH | METRICS_URL [--cert CERT_PATH --key KEY_PATH | --accept-invalid-cert]]`, os.Args[0])
+var usage = `The path or URL to metrics to convert, if omitted, defaults to read from STDIN.
+
+Examples:
+
+	$ prom2json http://my-prometheus-server:9000/metrics
+
+	$ curl http://my-prometheus-server:9000/metrics | prom2json
+	
+`
 
 func main() {
-	cert := flag.String("cert", "", "client certificate file")
-	key := flag.String("key", "", "client certificate's key file")
-	skipServerCertCheck := flag.Bool("accept-invalid-cert", false, "Accept any certificate during TLS handshake. Insecure, use only for testing.")
-	flag.Parse()
+	cert := kingpin.Flag("cert", "client certificate file").PlaceHolder("FILE").String()
+	key := kingpin.Flag("key", "client certificate's key file").PlaceHolder("FILE").String()
+	skipServerCertCheck := kingpin.Flag("accept-invalid-cert", "Accept any certificate during TLS handshake. Insecure, use only for testing.").Bool()
+	escapingScheme := kingpin.Flag("escaping", "Sets an escaping scheme in content negotiation. Use 'allow-utf-8' for full UTF-8 character support.").
+		PlaceHolder("SCHEME").
+		Enum(
+			"allow-utf-8",
+			"underscores",
+			"dots",
+			"values",
+		)
+
+	kingpin.CommandLine.UsageWriter(os.Stderr)
+	kingpin.Version(version.Print("prom2json"))
+	kingpin.HelpFlag.Short('h')
 
 	var input io.Reader
 	var err error
-	arg := flag.Arg(0)
-	flag.NArg()
+	arg := kingpin.Arg("METRICS_PATH | METRICS_URL", usage).String()
 
-	if flag.NArg() > 1 {
-		fmt.Fprintf(os.Stderr, "Too many arguments.\n%s", usage)
-		os.Exit(2)
-	}
+	kingpin.Parse()
 
-	if arg == "" {
+	if *arg == "" {
 		// Use stdin on empty argument.
 		input = os.Stdin
-	} else if url, urlErr := url.Parse(arg); urlErr != nil || url.Scheme == "" {
+	} else if url, urlErr := url.Parse(*arg); urlErr != nil || url.Scheme == "" {
 		// `url, err := url.Parse("/some/path.txt")` results in: `err == nil && url.Scheme == ""`
 		// Open file since arg appears not to be a valid URL (parsing error occurred or the scheme is missing).
-		if input, err = os.Open(arg); err != nil {
+		if input, err = os.Open(*arg); err != nil {
 			fmt.Fprintln(os.Stderr, "error opening file:", err)
 			os.Exit(1)
 		}
@@ -66,7 +82,6 @@ func main() {
 	}
 
 	mfChan := make(chan *dto.MetricFamily, 1024)
-
 	// Missing input means we are reading from an URL.
 	if input != nil {
 		go func() {
@@ -82,8 +97,7 @@ func main() {
 			os.Exit(1)
 		}
 		go func() {
-			err := prom2json.FetchMetricFamilies(arg, mfChan, transport)
-			if err != nil {
+			if err := prom2json.FetchMetricFamiliesWithEscapingScheme(*arg, mfChan, transport, *escapingScheme); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}

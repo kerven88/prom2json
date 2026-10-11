@@ -21,19 +21,29 @@ import (
 
 	"github.com/matttproud/golang_protobuf_extensions/pbutil"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 
 	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/prom2json/histogram"
 )
 
-const acceptHeader = `application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.7,text/plain;version=0.0.4;q=0.3`
+const (
+	acceptHeader = `application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;q=0.7,text/plain;version=1.0.0;q=0.2,text/plain;version=0.0.4;q=0.1`
+	// acceptHeaderTemplate takes the escaping scheme as its single
+	// parameter. Note that we even add the parameter to
+	// text/plain;version=0.0.4. This version officially does not support
+	// escaping scheme selection, but some targets implement it anyway, so
+	// no harm in trying.
+	acceptHeaderTemplate = `application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited;escaping=%[1]s;q=0.7,text/plain;version=1.0.0;escaping=%[1]s;q=0.2,text/plain;version=0.0.4;escaping=%[1]s;q=0.1`
+)
 
 // Family mirrors the MetricFamily proto message.
 type Family struct {
 	//Time    time.Time
-	Name    string        `json:"name"`
-	Help    string        `json:"help"`
-	Type    string        `json:"type"`
-	Metrics []interface{} `json:"metrics,omitempty"` // Either metric or summary.
+	Name    string `json:"name"`
+	Help    string `json:"help"`
+	Type    string `json:"type"`
+	Metrics []any  `json:"metrics,omitempty"` // Either metric or summary.
 }
 
 // Metric is for all "single value" metrics, i.e. Counter, Gauge, and Untyped.
@@ -56,7 +66,7 @@ type Summary struct {
 type Histogram struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	TimestampMs string            `json:"timestamp_ms,omitempty"`
-	Buckets     map[string]string `json:"buckets,omitempty"`
+	Buckets     any               `json:"buckets,omitempty"`
 	Count       string            `json:"count"`
 	Sum         string            `json:"sum"`
 }
@@ -68,7 +78,7 @@ func NewFamily(dtoMF *dto.MetricFamily) *Family {
 		Name:    dtoMF.GetName(),
 		Help:    dtoMF.GetHelp(),
 		Type:    dtoMF.GetType().String(),
-		Metrics: make([]interface{}, len(dtoMF.Metric)),
+		Metrics: make([]any, len(dtoMF.Metric)),
 	}
 	for i, m := range dtoMF.Metric {
 		switch dtoMF.GetType() {
@@ -81,13 +91,7 @@ func NewFamily(dtoMF *dto.MetricFamily) *Family {
 				Sum:         fmt.Sprint(m.GetSummary().GetSampleSum()),
 			}
 		case dto.MetricType_HISTOGRAM:
-			mf.Metrics[i] = Histogram{
-				Labels:      makeLabels(m),
-				TimestampMs: makeTimestamp(m),
-				Buckets:     makeBuckets(m),
-				Count:       fmt.Sprint(m.GetHistogram().GetSampleCount()),
-				Sum:         fmt.Sprint(m.GetHistogram().GetSampleSum()),
-			}
+			mf.Metrics[i] = makeHistogram(m)
 		default:
 			mf.Metrics[i] = Metric{
 				Labels:      makeLabels(m),
@@ -110,6 +114,35 @@ func getValue(m *dto.Metric) float64 {
 	default:
 		return 0.
 	}
+}
+
+func makeHistogram(m *dto.Metric) Histogram {
+	dtoH := m.GetHistogram()
+	hist := Histogram{
+		Labels:      makeLabels(m),
+		TimestampMs: makeTimestamp(m),
+		Sum:         fmt.Sprint(dtoH.GetSampleSum()),
+	}
+	// A native histogram is marked by at least one span.
+	if len(dtoH.GetNegativeSpan())+len(dtoH.GetPositiveSpan()) > 0 {
+		h, fh := histogram.NewModelHistogram(dtoH)
+		if h == nil {
+			// float histogram
+			hist.Buckets = histogram.BucketsAsJson[float64](histogram.GetAPIFloatBuckets(fh))
+			hist.Count = fmt.Sprint(fh.Count)
+		} else {
+			hist.Buckets = histogram.BucketsAsJson[uint64](histogram.GetAPIBuckets(h))
+			hist.Count = fmt.Sprint(h.Count)
+		}
+	} else {
+		hist.Buckets = makeBuckets(m)
+		if count := dtoH.GetSampleCountFloat(); count > 0 {
+			hist.Count = fmt.Sprint(count)
+		} else {
+			hist.Count = fmt.Sprint(dtoH.GetSampleCount())
+		}
+	}
+	return hist
 }
 
 func makeLabels(m *dto.Metric) map[string]string {
@@ -138,7 +171,11 @@ func makeQuantiles(m *dto.Metric) map[string]string {
 func makeBuckets(m *dto.Metric) map[string]string {
 	result := map[string]string{}
 	for _, b := range m.GetHistogram().Bucket {
-		result[fmt.Sprint(b.GetUpperBound())] = fmt.Sprint(b.GetCumulativeCount())
+		if count := b.GetCumulativeCountFloat(); count > 0 {
+			result[fmt.Sprint(b.GetUpperBound())] = fmt.Sprint(count)
+		} else {
+			result[fmt.Sprint(b.GetUpperBound())] = fmt.Sprint(b.GetCumulativeCount())
+		}
 	}
 	return result
 }
@@ -148,17 +185,28 @@ func makeBuckets(m *dto.Metric) map[string]string {
 // returns after all MetricFamilies have been sent. The provided transport
 // may be nil (in which case the default Transport is used).
 func FetchMetricFamilies(url string, ch chan<- *dto.MetricFamily, transport http.RoundTripper) error {
+	return FetchMetricFamiliesWithEscapingScheme(url, ch, transport, "")
+}
+
+// FetchMetricFamiliesWithEscapingScheme works like FetchMetricFamilies but adds
+// the provided string as the value of the additional 'escaping' parameter in
+// the accept header.
+func FetchMetricFamiliesWithEscapingScheme(url string, ch chan<- *dto.MetricFamily, transport http.RoundTripper, escapingScheme string) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		close(ch)
-		return fmt.Errorf("creating GET request for URL %q failed: %v", url, err)
+		return fmt.Errorf("creating GET request for URL %q failed: %w", url, err)
 	}
-	req.Header.Add("Accept", acceptHeader)
+	if escapingScheme != "" {
+		req.Header.Add("Accept", fmt.Sprintf(acceptHeaderTemplate, escapingScheme))
+	} else {
+		req.Header.Add("Accept", acceptHeader)
+	}
 	client := http.Client{Transport: transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		close(ch)
-		return fmt.Errorf("executing GET request for URL %q failed: %v", url, err)
+		return fmt.Errorf("executing GET request for URL %q failed: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -183,7 +231,7 @@ func ParseResponse(resp *http.Response, ch chan<- *dto.MetricFamily) error {
 				if err == io.EOF {
 					break
 				}
-				return fmt.Errorf("reading metric family protocol buffer failed: %v", err)
+				return fmt.Errorf("reading metric family protocol buffer failed: %w", err)
 			}
 			ch <- mf
 		}
@@ -203,7 +251,7 @@ func ParseReader(in io.Reader, ch chan<- *dto.MetricFamily) error {
 	// We could do further content-type checks here, but the
 	// fallback for now will anyway be the text format
 	// version 0.0.4, so just go for it and see if it works.
-	var parser expfmt.TextParser
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 	metricFamilies, err := parser.TextToMetricFamilies(in)
 	if err != nil {
 		return fmt.Errorf("reading text format failed: %v", err)
